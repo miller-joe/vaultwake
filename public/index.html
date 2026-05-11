@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>vaultwake</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --border:#30363d; --accent:#58a6ff; --ok:#3fb950; --bad:#f85149; --warn:#d29922; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+    main { max-width: 880px; margin: 24px auto; padding: 0 16px; }
+    h1 { margin: 0 0 16px; font-size: 22px; }
+    h2 { margin: 24px 0 8px; font-size: 16px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .banner { display: flex; align-items: center; gap: 12px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; }
+    .dot.sealed { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+    .dot.unsealed { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.unknown { background: var(--warn); }
+    .banner-text { flex: 1; }
+    .banner-text strong { display: block; font-size: 15px; }
+    .banner-text span { color: var(--muted); font-size: 12px; }
+    input[type=password], input[type=text] { width: 100%; background: #0d1117; border: 1px solid var(--border); color: var(--fg); padding: 10px 12px; border-radius: 6px; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    input:focus { outline: none; border-color: var(--accent); }
+    button { background: var(--accent); color: #0d1117; border: 0; padding: 10px 16px; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); font-weight: 400; }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+    .stacks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; }
+    .stack { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+    .stack input { width: auto; }
+    .stack label { cursor: pointer; user-select: none; }
+    .stack.skipped label { color: var(--muted); text-decoration: line-through; }
+    #log { background: #010409; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 360px; overflow: auto; white-space: pre-wrap; }
+    .log-line { color: var(--fg); }
+    .log-phase { color: var(--accent); font-weight: 600; }
+    .log-error { color: var(--bad); }
+    .log-ok { color: var(--ok); }
+    .muted { color: var(--muted); font-size: 12px; }
+    .toolbar { display: flex; gap: 8px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>vaultwake</h1>
+
+  <div class="card banner" id="banner">
+    <div class="dot unknown" id="seal-dot"></div>
+    <div class="banner-text">
+      <strong id="seal-label">checking…</strong>
+      <span id="seal-detail"></span>
+    </div>
+    <button class="secondary" id="refresh-btn" type="button">Refresh</button>
+  </div>
+
+  <h2>Unseal</h2>
+  <div class="card">
+    <input type="password" id="key" placeholder="Vault unseal key" autocomplete="off" />
+    <div class="row">
+      <button id="unseal-btn" type="button">Unseal &amp; Restart</button>
+      <button class="secondary" id="restart-only-btn" type="button">Restart only</button>
+      <span class="muted" id="action-hint"></span>
+    </div>
+  </div>
+
+  <h2>Discovered stacks <span class="muted" id="stack-count"></span></h2>
+  <div class="card">
+    <p class="muted" style="margin-top:0">Auto-detected stacks under <code>/stacks</code> with a <code>vault-agent</code> service. Tick to skip during restart.</p>
+    <div class="stacks" id="stacks"></div>
+    <div class="row toolbar">
+      <button class="secondary" id="save-skip-btn" type="button">Save skip list</button>
+      <span class="muted" id="skip-saved"></span>
+    </div>
+  </div>
+
+  <h2>Activity</h2>
+  <div id="log" class="card"><span class="muted">No run yet.</span></div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const log = $("log");
+
+  let stacks = [];
+
+  async function loadStatus() {
+    log.innerHTML = '<span class="muted">Loading…</span>';
+    try {
+      const r = await fetch("/api/status");
+      const data = await r.json();
+      renderSeal(data.seal);
+      stacks = data.stacks || [];
+      renderStacks();
+      log.innerHTML = '<span class="muted">Ready. ' + stacks.length + ' stacks discovered.</span>';
+    } catch (e) {
+      log.innerHTML = '<span class="log-error">' + e.message + '</span>';
+    }
+  }
+
+  function renderSeal(seal) {
+    const dot = $("seal-dot");
+    const label = $("seal-label");
+    const detail = $("seal-detail");
+    const unsealBtn = $("unseal-btn");
+    if (seal && typeof seal.sealed === "boolean") {
+      if (seal.sealed) {
+        dot.className = "dot sealed";
+        label.textContent = "Vault is SEALED";
+        detail.textContent = "progress " + (seal.progress ?? 0) + " / " + (seal.threshold ?? "?") + " — version " + (seal.version ?? "");
+        unsealBtn.disabled = false;
+        $("action-hint").textContent = "Enter your unseal key, then click “Unseal & Restart”.";
+      } else {
+        dot.className = "dot unsealed";
+        label.textContent = "Vault is UNSEALED";
+        detail.textContent = "version " + (seal.version ?? "");
+        unsealBtn.disabled = true;
+        $("action-hint").textContent = "Vault is already unsealed. Use “Restart only” if you just want to bounce stacks.";
+      }
+    } else {
+      dot.className = "dot unknown";
+      label.textContent = "Vault status unknown";
+      detail.textContent = (seal && seal.error) || "";
+      unsealBtn.disabled = true;
+    }
+  }
+
+  function renderStacks() {
+    const root = $("stacks");
+    root.innerHTML = "";
+    stacks.forEach((s, i) => {
+      const div = document.createElement("div");
+      div.className = "stack" + (s.skipped ? " skipped" : "");
+      const id = "skip-" + i;
+      div.innerHTML = '<input type="checkbox" id="' + id + '"' + (s.skipped ? " checked" : "") + '/><label for="' + id + '">' + s.name + '</label>';
+      div.querySelector("input").addEventListener("change", (ev) => {
+        s.skipped = ev.target.checked;
+        div.classList.toggle("skipped", s.skipped);
+      });
+      root.appendChild(div);
+    });
+    $("stack-count").textContent = "(" + stacks.length + ")";
+  }
+
+  async function saveSkip() {
+    const skipped = stacks.filter((s) => s.skipped).map((s) => s.name);
+    const r = await fetch("/api/skip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ skipped }) });
+    const data = await r.json();
+    $("skip-saved").textContent = data.ok ? "Saved at " + new Date().toLocaleTimeString() : ("error: " + data.error);
+    setTimeout(() => { $("skip-saved").textContent = ""; }, 3000);
+  }
+
+  function appendLog(ev) {
+    const span = document.createElement("div");
+    if (ev.type === "phase") {
+      span.className = "log-phase";
+      span.textContent = "▶ " + ev.message;
+    } else if (ev.type === "error") {
+      span.className = "log-error";
+      span.textContent = "✗ " + ev.message;
+    } else if (ev.type === "stack-done") {
+      span.className = ev.ok ? "log-ok" : "log-error";
+      span.textContent = (ev.ok ? "✓ " : "✗ ") + ev.stack + " " + ev.phase + (ev.ok ? "" : " FAILED");
+    } else if (ev.type === "log") {
+      span.className = "log-line";
+      span.textContent = "[" + ev.stack + "] " + ev.line;
+    }
+    log.appendChild(span);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function streamRestart() {
+    log.innerHTML = "";
+    return new Promise((resolve) => {
+      const es = new EventSource("/api/restart");
+      es.onmessage = (msg) => {
+        try {
+          const ev = JSON.parse(msg.data);
+          appendLog(ev);
+          if (ev.type === "phase" && ev.phase === "done") {
+            es.close();
+            resolve();
+          }
+        } catch (e) { /* ignore */ }
+      };
+      es.onerror = () => { es.close(); resolve(); };
+    });
+  }
+
+  async function doUnseal() {
+    const key = $("key").value;
+    if (!key) { $("action-hint").textContent = "Key is empty."; return; }
+    $("unseal-btn").disabled = true;
+    $("restart-only-btn").disabled = true;
+    log.innerHTML = '<span class="log-phase">▶ Submitting unseal key…</span>';
+    try {
+      const r = await fetch("/api/unseal", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }) });
+      const data = await r.json();
+      if (!data.ok) {
+        appendLog({ type: "error", message: data.error || "unseal failed" });
+        $("unseal-btn").disabled = false;
+        $("restart-only-btn").disabled = false;
+        return;
+      }
+      $("key").value = "";
+      renderSeal(data.seal);
+      if (data.seal && data.seal.sealed) {
+        appendLog({ type: "phase", message: "Still sealed (threshold not reached). Submit additional keys." });
+        $("unseal-btn").disabled = false;
+        $("restart-only-btn").disabled = false;
+        return;
+      }
+      appendLog({ type: "phase", message: "Vault unsealed. Restarting stacks…" });
+      await streamRestart();
+    } catch (e) {
+      appendLog({ type: "error", message: e.message });
+    } finally {
+      $("unseal-btn").disabled = false;
+      $("restart-only-btn").disabled = false;
+      loadStatus();
+    }
+  }
+
+  async function doRestartOnly() {
+    $("unseal-btn").disabled = true;
+    $("restart-only-btn").disabled = true;
+    log.innerHTML = "";
+    try {
+      await streamRestart();
+    } finally {
+      $("unseal-btn").disabled = false;
+      $("restart-only-btn").disabled = false;
+      loadStatus();
+    }
+  }
+
+  $("refresh-btn").addEventListener("click", loadStatus);
+  $("unseal-btn").addEventListener("click", doUnseal);
+  $("restart-only-btn").addEventListener("click", doRestartOnly);
+  $("save-skip-btn").addEventListener("click", saveSkip);
+
+  loadStatus();
+</script>
+</body>
+</html>

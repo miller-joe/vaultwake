@@ -1,0 +1,51 @@
+{
+  "name": "vaultwake",
+  "version": "0.1.0",
+  "description": "One-click HashiCorp Vault unseal + auto-restart of dependent Docker stacks. Self-hosted homelab utility.",
+  "license": "MIT",
+  "author": "Joe Miller <joe@indivision.net> (https://github.com/miller-joe)",
+  "type": "module",
+  "files": [
+    "dist",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miller-joe/vaultwake.git"
+  },
+  "bugs": {
+    "url": "https://github.com/miller-joe/vaultwake/issues"
+  },
+  "homepage": "https://github.com/miller-joe/vaultwake#readme",
+  "keywords": [
+    "vault",
+    "hashicorp-vault",
+    "docker",
+    "docker-compose",
+    "homelab",
+    "selfhosted",
+    "unseal",
+    "devops"
+  ]
+}
