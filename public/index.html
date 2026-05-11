@@ -36,8 +36,21 @@
     .log-phase { color: var(--accent); font-weight: 600; }
     .log-error { color: var(--bad); }
     .log-ok { color: var(--ok); }
+    .log-warn { color: var(--warn); }
     .muted { color: var(--muted); font-size: 12px; }
     .toolbar { display: flex; gap: 8px; }
+    .summary { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: #0d1117; }
+    .summary .label { color: var(--muted); }
+    .chip { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin: 1px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .chip.ok { background: rgba(63,185,80,.15); color: var(--ok); border: 1px solid rgba(63,185,80,.35); }
+    .chip.bad { background: rgba(248,81,73,.15); color: var(--bad); border: 1px solid rgba(248,81,73,.35); }
+    .chip.warn { background: rgba(210,153,34,.15); color: var(--warn); border: 1px solid rgba(210,153,34,.35); }
+    .run-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); align-items: center; }
+    .run-item:first-child { border-top: 0; }
+    .run-item a { color: var(--accent); text-decoration: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .run-item a:hover { text-decoration: underline; }
+    .run-details { grid-column: 1 / -1; padding: 8px 12px; background: #010409; border-radius: 6px; margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .run-details a { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -73,8 +86,17 @@
     </div>
   </div>
 
-  <h2>Activity</h2>
+  <h2>Activity <span class="muted" id="run-id"></span></h2>
   <div id="log" class="card"><span class="muted">No run yet.</span></div>
+
+  <h2>Past runs</h2>
+  <div class="card">
+    <div class="row toolbar" style="margin-bottom:8px">
+      <button class="secondary" id="refresh-runs-btn" type="button">Refresh</button>
+      <span class="muted" id="runs-hint"></span>
+    </div>
+    <div id="runs"></div>
+  </div>
 </main>
 
 <script>
@@ -149,27 +171,58 @@
     setTimeout(() => { $("skip-saved").textContent = ""; }, 3000);
   }
 
+  let currentRunId = null;
+
   function appendLog(ev) {
     const span = document.createElement("div");
-    if (ev.type === "phase") {
+    if (ev.type === "run-start") {
+      currentRunId = ev.runId;
+      $("run-id").textContent = "run " + ev.runId;
+      span.className = "log-phase";
+      const opts = ev.options || {};
+      span.textContent = "▶ run " + ev.runId + "  concurrency=" + opts.concurrency + " retries=" + opts.retries + " pull=" + opts.pull + " build=" + opts.build;
+    } else if (ev.type === "phase") {
       span.className = "log-phase";
       span.textContent = "▶ " + ev.message;
     } else if (ev.type === "error") {
       span.className = "log-error";
       span.textContent = "✗ " + ev.message;
+    } else if (ev.type === "stack-attempt") {
+      span.className = "log-warn";
+      span.textContent = "↻ " + ev.stack + " " + ev.phase + " — retry " + ev.attempt + "/" + ev.maxAttempts;
     } else if (ev.type === "stack-done") {
       span.className = ev.ok ? "log-ok" : "log-error";
-      span.textContent = (ev.ok ? "✓ " : "✗ ") + ev.stack + " " + ev.phase + (ev.ok ? "" : " FAILED");
+      span.textContent = (ev.ok ? "✓ " : "✗ ") + ev.stack + " " + ev.phase + (ev.ok ? "" : " FAILED") + (ev.note ? " — " + ev.note : "");
+    } else if (ev.type === "summary") {
+      appendSummary(ev);
+      return;
     } else if (ev.type === "log") {
       span.className = "log-line";
+      const cls = /WARN|warning/i.test(ev.line) ? " log-warn" : "";
+      span.className += cls;
       span.textContent = "[" + ev.stack + "] " + ev.line;
     }
     log.appendChild(span);
     log.scrollTop = log.scrollHeight;
   }
 
+  function appendSummary(ev) {
+    const div = document.createElement("div");
+    div.className = "summary";
+    const dur = (ev.durationMs / 1000).toFixed(1) + "s";
+    div.innerHTML =
+      '<span class="label">duration</span><span>' + dur + '</span>' +
+      '<span class="label">succeeded</span><span>' + (ev.succeeded.length ? ev.succeeded.map((n) => '<span class="chip ok">' + n + '</span>').join("") : '<span class="muted">none</span>') + '</span>' +
+      (ev.retried.length ? '<span class="label">retried</span><span>' + ev.retried.map((n) => '<span class="chip warn">' + n + '</span>').join("") + '</span>' : '') +
+      '<span class="label">failed</span><span>' + (ev.failed.length ? ev.failed.map((n) => '<span class="chip bad">' + n + '</span>').join("") : '<span class="muted">none</span>') + '</span>';
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+
   function streamRestart() {
     log.innerHTML = "";
+    $("run-id").textContent = "";
+    currentRunId = null;
     return new Promise((resolve) => {
       const es = new EventSource("/api/restart");
       es.onmessage = (msg) => {
@@ -178,12 +231,64 @@
           appendLog(ev);
           if (ev.type === "phase" && ev.phase === "done") {
             es.close();
+            loadRuns();
             resolve();
           }
         } catch (e) { /* ignore */ }
       };
       es.onerror = () => { es.close(); resolve(); };
     });
+  }
+
+  async function loadRuns() {
+    const root = $("runs");
+    root.innerHTML = '<div class="muted">Loading…</div>';
+    try {
+      const r = await fetch("/api/runs?limit=20");
+      const data = await r.json();
+      const runs = data.runs || [];
+      if (runs.length === 0) {
+        root.innerHTML = '<div class="muted">No past runs yet.</div>';
+        return;
+      }
+      root.innerHTML = "";
+      runs.forEach((meta) => {
+        const item = document.createElement("div");
+        item.className = "run-item";
+        const ok = (meta.result && meta.result.failed && meta.result.failed.length === 0) ? "ok" : (meta.result ? "bad" : "warn");
+        const status = meta.result ? (meta.result.failed.length === 0 ? "OK" : meta.result.failed.length + " failed") : "incomplete";
+        const dur = meta.result ? (meta.result.durationMs / 1000).toFixed(1) + "s" : "—";
+        const stacks = (meta.result ? meta.result.succeeded.length + meta.result.failed.length : (meta.stacks || []).length);
+        item.innerHTML =
+          '<a href="#" data-runid="' + meta.runId + '">' + meta.runId + '</a>' +
+          '<span class="muted">' + new Date(meta.startedAt).toLocaleString() + ' · ' + stacks + ' stacks · ' + dur + '</span>' +
+          '<span class="chip ' + ok + '">' + status + '</span>';
+        item.querySelector("a").addEventListener("click", (ev) => {
+          ev.preventDefault();
+          toggleRunDetails(item, meta);
+        });
+        root.appendChild(item);
+      });
+      $("runs-hint").textContent = runs.length + " run(s).";
+    } catch (e) {
+      root.innerHTML = '<div class="log-error">' + e.message + '</div>';
+    }
+  }
+
+  function toggleRunDetails(item, meta) {
+    const existing = item.querySelector(".run-details");
+    if (existing) { existing.remove(); return; }
+    const det = document.createElement("div");
+    det.className = "run-details";
+    const r = meta.result || { succeeded: [], failed: [], retried: [], skipped: 0 };
+    const link = (name) => '<a href="/api/runs/' + meta.runId + '/log/' + encodeURIComponent(name) + '" target="_blank">' + name + '</a>';
+    det.innerHTML =
+      '<div>options: concurrency=' + meta.options.concurrency + ' pull=' + meta.options.pull + ' build=' + meta.options.build + ' retries=' + meta.options.retries + ' timeout=' + meta.options.timeoutMs + 'ms</div>' +
+      '<div style="margin-top:6px">succeeded (' + r.succeeded.length + '): ' + (r.succeeded.length ? r.succeeded.map(link).join(", ") : "<span class='muted'>none</span>") + '</div>' +
+      (r.retried.length ? '<div>retried (' + r.retried.length + '): ' + r.retried.map(link).join(", ") + '</div>' : '') +
+      '<div>failed (' + r.failed.length + '): ' + (r.failed.length ? r.failed.map(link).join(", ") : "<span class='muted'>none</span>") + '</div>' +
+      '<div style="margin-top:6px"><a href="/api/runs/' + meta.runId + '/log" target="_blank">[combined log]</a> <a href="/api/runs/' + meta.runId + '" target="_blank">[meta.json]</a></div>';
+    item.appendChild(det);
   }
 
   async function doUnseal() {
@@ -237,8 +342,10 @@
   $("unseal-btn").addEventListener("click", doUnseal);
   $("restart-only-btn").addEventListener("click", doRestartOnly);
   $("save-skip-btn").addEventListener("click", saveSkip);
+  $("refresh-runs-btn").addEventListener("click", loadRuns);
 
   loadStatus();
+  loadRuns();
 </script>
 </body>
 </html>

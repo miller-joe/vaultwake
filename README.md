@@ -10,8 +10,11 @@ After a server restart, Vault comes up sealed. Anything that depends on a vault-
 2. Takes your unseal key in a single field.
 3. Calls Vault's API to unseal.
 4. Discovers every Docker Compose stack that has a `vault-agent` service — automatically, no list to maintain.
-5. Restarts those stacks (parallel `down` → wait → parallel `up -d`), streaming live logs to the browser.
-6. Lets you opt specific stacks out via a checklist that persists to disk.
+5. Restarts those stacks with a bounded-concurrency `down` → wait → `up -d`, retries failures, verifies each stack is actually running afterwards, and streams live logs to the browser.
+6. Persists every run to `$DATA_DIR/logs/<run-id>/` so you can read what happened the next day. Past runs are browsable in the UI and via `/api/runs`.
+7. Lets you opt specific stacks out via a checklist that persists to disk.
+
+By default vaultwake passes `--pull never --no-build` so it never re-downloads or rebuilds images — image management is left to your update pipeline (e.g. bumpsight). Set `COMPOSE_PULL=missing` / `COMPOSE_BUILD=true` if you want different behavior.
 
 ## Why not a hardcoded list
 
@@ -52,7 +55,41 @@ Then `docker compose up -d` and visit `http://<host>:8210`.
 | `PORT` | `3000` | Listen port inside the container |
 | `VAULT_ADDR` | `http://vault:8200` | Base URL of the Vault API |
 | `STACKS_DIR` | `/stacks` | Where to scan for `*/compose.yaml` |
-| `DATA_DIR` | `/data` | Where the skip-list JSON lives |
+| `DATA_DIR` | `/data` | Where the skip-list and run logs live |
+| `STACK_CONCURRENCY` | `4` | How many stacks to `down`/`up` in parallel. Set lower if dockerd is saturating. |
+| `STACK_TIMEOUT_MS` | `180000` | Per-stack subprocess timeout. SIGTERM at the limit, SIGKILL 5s later. |
+| `STACK_RETRIES` | `1` | Retries per stack on failure (not counting the first attempt). |
+| `STACK_RETRY_BACKOFF_MS` | `5000` | Sleep between retry attempts. |
+| `WAIT_BETWEEN_MS` | `3000` | Pause after the stop phase before starting. |
+| `COMPOSE_PULL` | `never` | `--pull` flag for `compose up`: `never` / `missing` / `always`. |
+| `COMPOSE_BUILD` | `false` | If true, allow `compose up` to auto-build. Default passes `--no-build`. |
+| `LOG_RETENTION` | `50` | How many past runs to keep on disk (older runs are pruned after each run). |
+
+## Run logs
+
+Every restart writes a directory under `$DATA_DIR/logs/<run-id>/`:
+
+```
+20260511-094523-x1y2/
+├── meta.json          # options, started/ended, per-stack succeeded/failed/retried
+├── combined.log       # every SSE event in chronological order (JSONL)
+├── gitea.log          # raw docker-compose output for this stack
+├── seafile.log
+└── ...
+```
+
+You can read them from the "Past runs" panel in the UI, or via the API:
+
+| Endpoint | What |
+| --- | --- |
+| `GET /api/runs?limit=20` | List recent runs with their `meta.json` (newest first). |
+| `GET /api/runs/:id` | One run's `meta.json`. |
+| `GET /api/runs/:id/log` | Combined JSONL stream for the run. |
+| `GET /api/runs/:id/log/:stack` | Per-stack plain-text log. |
+
+## How stack health is verified
+
+After `compose up -d` exits 0, vaultwake runs `compose ps --format json` for that stack and only marks it OK if every service is in state `running`. This catches the common failure mode where `up -d` returns success but a service exits immediately (e.g. a `vault-agent`-rendered env var didn't make it into the entrypoint). Stacks that fail the post-up check are retried per `STACK_RETRIES` and reported with their failing service in the run summary.
 
 ---
 
