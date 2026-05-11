@@ -1,3 +1,5 @@
+<img src="assets/logo.svg" width="80" height="80" alt="vaultwake">
+
 # vaultwake
 
 One-click [HashiCorp Vault](https://www.vaultproject.io/) unseal + auto-restart of dependent Docker stacks. Built for self-hosted homelabs where Vault gates secrets that other services need at boot.

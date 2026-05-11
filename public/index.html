@@ -10,6 +10,9 @@
     body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
     main { max-width: 880px; margin: 24px auto; padding: 0 16px; }
     h1 { margin: 0 0 16px; font-size: 22px; }
+    .brand { display: flex; align-items: center; gap: 12px; color: #dc2626; }
+    .brand span { color: var(--fg); }
+    .brand-mark { flex: 0 0 auto; }
     h2 { margin: 24px 0 8px; font-size: 16px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
     .banner { display: flex; align-items: center; gap: 12px; }
@@ -55,7 +58,14 @@
 </head>
 <body>
 <main>
-  <h1>vaultwake</h1>
+  <h1 class="brand">
+    <svg class="brand-mark" viewBox="0 0 96 96" width="36" height="36" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="vaultwake">
+      <path d="M 10 28 L 24 66 L 38 28"/>
+      <path d="M 46 28 L 56 66 L 66 44 L 76 66 L 86 28"/>
+      <path d="M 10 80 H 28 L 32 74 L 38 86 L 44 74 L 48 80 H 86" stroke-width="2.5" stroke-opacity="0.7"/>
+    </svg>
+    <span>vaultwake</span>
+  </h1>
 
   <div class="card banner" id="banner">
     <div class="dot unknown" id="seal-dot"></div>
