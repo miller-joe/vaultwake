@@ -11,6 +11,7 @@ import {
   type LogSink,
   type RestartOptions,
   type PullPolicy,
+  type RestartStrategy,
 } from "./restart.js";
 import { RunLog, type RunOptionsMeta } from "./runLog.js";
 
@@ -29,6 +30,7 @@ const options: RestartOptions = {
   waitBetweenMs: nonNegativeInt(process.env.WAIT_BETWEEN_MS, DEFAULT_OPTIONS.waitBetweenMs),
   pull: parsePull(process.env.COMPOSE_PULL),
   build: parseBool(process.env.COMPOSE_BUILD, DEFAULT_OPTIONS.build),
+  strategy: parseStrategy(process.env.RESTART_STRATEGY),
 };
 
 function positiveInt(s: string | undefined, fallback: number): number {
@@ -42,6 +44,10 @@ function nonNegativeInt(s: string | undefined, fallback: number): number {
 function parsePull(s: string | undefined): PullPolicy {
   if (s === "always" || s === "missing" || s === "never") return s;
   return DEFAULT_OPTIONS.pull;
+}
+function parseStrategy(s: string | undefined): RestartStrategy {
+  if (s === "recreate" || s === "down-up") return s;
+  return DEFAULT_OPTIONS.strategy;
 }
 function parseBool(s: string | undefined, fallback: boolean): boolean {
   if (s === undefined) return fallback;
@@ -217,6 +223,7 @@ function optionsView(): RunOptionsMeta {
     retries: options.retries,
     pull: options.pull,
     build: options.build,
+    strategy: options.strategy,
   };
 }
 
@@ -231,7 +238,7 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(
     `vaultwake listening on :${PORT} (vault=${VAULT_ADDR}, stacks=${STACKS_DIR}, data=${DATA_DIR}, ` +
-      `concurrency=${options.concurrency}, pull=${options.pull}, build=${options.build}, ` +
+      `strategy=${options.strategy}, concurrency=${options.concurrency}, pull=${options.pull}, build=${options.build}, ` +
       `retries=${options.retries}, timeout=${options.timeoutMs}ms)`,
   );
 });

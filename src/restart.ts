@@ -4,6 +4,15 @@ import type { DiscoveredStack } from "./discovery.js";
 export type Phase = "stop" | "wait" | "start" | "verify" | "done";
 export type PullPolicy = "always" | "missing" | "never";
 
+// How a stack is restarted to pick up freshly-rendered secrets after unseal:
+//   recreate (default) — `up -d --force-recreate`, which recreates containers in
+//     place WITHOUT removing networks. Safe for stacks that share an external
+//     network (a `down` on the network's owner removes it and breaks every
+//     dependent stack — the cascade is invisible until a dependent fails).
+//   down-up — legacy `down` then `up`. Fuller teardown, but removes any network
+//     the project owns; only use it if you know none of your stacks share one.
+export type RestartStrategy = "recreate" | "down-up";
+
 export type LogEvent =
   | { type: "run-start"; runId: string; options: RestartOptionsView }
   | { type: "log"; stack: string; line: string }
@@ -23,11 +32,12 @@ export interface RestartOptions {
   waitBetweenMs: number;
   pull: PullPolicy;
   build: boolean;
+  strategy: RestartStrategy;
 }
 
 export type RestartOptionsView = Pick<
   RestartOptions,
-  "concurrency" | "timeoutMs" | "retries" | "pull" | "build"
+  "concurrency" | "timeoutMs" | "retries" | "pull" | "build" | "strategy"
 >;
 
 export const DEFAULT_OPTIONS: RestartOptions = {
@@ -36,8 +46,13 @@ export const DEFAULT_OPTIONS: RestartOptions = {
   retries: 1,
   retryBackoffMs: 5_000,
   waitBetweenMs: 3_000,
-  pull: "never",
+  // `missing` pulls images that aren't in the local cache (like plain
+  // `docker compose up`) but never re-pulls a cached one, so it heals
+  // pinned-but-unpulled tags without causing surprise upgrades.
+  pull: "missing",
   build: false,
+  // Recreate in place by default — never tears down shared external networks.
+  strategy: "recreate",
 };
 
 interface ComposeResult {
@@ -61,35 +76,43 @@ export async function restartStacks(
     return { succeeded, failed, retried: [] };
   }
 
-  sink({
-    type: "phase",
-    phase: "stop",
-    message: `Stopping ${stacks.length} stacks (concurrency=${options.concurrency})...`,
-  });
-  const stopResults = await runWithLimit(stacks, options.concurrency, async (s) => {
-    const ok = await runWithRetries(s, "stop", options, sink, retried);
-    return { stack: s, ok };
-  });
-  const stopFailed = stopResults.filter((r) => !r.ok).map((r) => r.stack.name);
-  if (stopFailed.length > 0) {
+  // Legacy down-up strategy: stop everything first, then start everything.
+  // Skipped entirely in the default `recreate` strategy, which never `down`s
+  // (and so never removes a network another stack depends on).
+  if (options.strategy === "down-up") {
     sink({
-      type: "log",
-      stack: "(vaultwake)",
-      line: `WARN: ${stopFailed.length} stack(s) failed to stop cleanly: ${stopFailed.join(", ")}. Proceeding with start phase anyway.`,
+      type: "phase",
+      phase: "stop",
+      message: `Stopping ${stacks.length} stacks (concurrency=${options.concurrency})...`,
     });
+    const stopResults = await runWithLimit(stacks, options.concurrency, async (s) => {
+      const ok = await runWithRetries(s, "stop", options, sink, retried);
+      return { stack: s, ok };
+    });
+    const stopFailed = stopResults.filter((r) => !r.ok).map((r) => r.stack.name);
+    if (stopFailed.length > 0) {
+      sink({
+        type: "log",
+        stack: "(vaultwake)",
+        line: `WARN: ${stopFailed.length} stack(s) failed to stop cleanly: ${stopFailed.join(", ")}. Proceeding with start phase anyway.`,
+      });
+    }
+
+    sink({
+      type: "phase",
+      phase: "wait",
+      message: `Waiting ${options.waitBetweenMs / 1000}s before starting...`,
+    });
+    await sleep(options.waitBetweenMs);
   }
 
   sink({
     type: "phase",
-    phase: "wait",
-    message: `Waiting ${options.waitBetweenMs / 1000}s before starting...`,
-  });
-  await sleep(options.waitBetweenMs);
-
-  sink({
-    type: "phase",
     phase: "start",
-    message: `Starting ${stacks.length} stacks (concurrency=${options.concurrency}, pull=${options.pull}, build=${options.build})...`,
+    message:
+      options.strategy === "recreate"
+        ? `Recreating ${stacks.length} stacks in place (concurrency=${options.concurrency}, pull=${options.pull}, build=${options.build})...`
+        : `Starting ${stacks.length} stacks (concurrency=${options.concurrency}, pull=${options.pull}, build=${options.build})...`,
   });
   const startResults = await runWithLimit(stacks, options.concurrency, async (s) => {
     const ok = await runWithRetries(s, "start", options, sink, retried);
@@ -163,7 +186,13 @@ function runCompose(
   if (phase === "stop") {
     args.push("down");
   } else {
-    args.push("up", "-d", `--pull=${options.pull}`);
+    args.push("up", "-d");
+    if (options.strategy === "recreate") {
+      // Recreate containers in place (picks up freshly-rendered secrets) but
+      // keep the networks — `--force-recreate` won't remove a shared one.
+      args.push("--force-recreate", "--remove-orphans");
+    }
+    args.push(`--pull=${options.pull}`);
     if (!options.build) args.push("--no-build");
   }
 

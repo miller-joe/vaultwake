@@ -1,6 +1,6 @@
 {
   "name": "vaultwake",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One-click HashiCorp Vault unseal + auto-restart of dependent Docker stacks. Self-hosted homelab utility.",
   "license": "MIT",
   "author": "Joe Miller <joe@indivision.net> (https://github.com/miller-joe)",

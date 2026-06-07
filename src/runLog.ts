@@ -8,6 +8,7 @@ export interface RunOptionsMeta {
   retries: number;
   pull: "always" | "missing" | "never";
   build: boolean;
+  strategy: "recreate" | "down-up";
 }
 
 export interface RunMeta {

@@ -12,11 +12,15 @@ After a server restart, Vault comes up sealed. Anything that depends on a vault-
 2. Takes your unseal key in a single field.
 3. Calls Vault's API to unseal.
 4. Discovers every Docker Compose stack that has a `vault-agent` service — automatically, no list to maintain.
-5. Restarts those stacks with a bounded-concurrency `down` → wait → `up -d`, retries failures, verifies each stack is actually running afterwards, and streams live logs to the browser.
+5. Restarts those stacks with bounded concurrency — by default `up -d --force-recreate` (recreates containers in place to pick up the freshly-rendered secrets, *without* tearing down networks) — retries failures, verifies each stack is actually running afterwards, and streams live logs to the browser.
 6. Persists every run to `$DATA_DIR/logs/<run-id>/` so you can read what happened the next day. Past runs are browsable in the UI and via `/api/runs`.
 7. Lets you opt specific stacks out via a checklist that persists to disk.
 
-By default vaultwake passes `--pull never --no-build` so it never re-downloads or rebuilds images — image management is left to your update pipeline (e.g. bumpsight). Set `COMPOSE_PULL=missing` / `COMPOSE_BUILD=true` if you want different behavior.
+By default vaultwake **recreates** each stack in place (`up -d --force-recreate`) and pulls only images that are **missing** from the local cache (never re-pulling a cached one, so it won't surprise-upgrade you). It passes `--no-build` so it never rebuilds. Image *upgrades* are left to your update pipeline (e.g. bumpsight); vaultwake only fetches a pinned tag that isn't present yet. Set `RESTART_STRATEGY=down-up`, `COMPOSE_PULL=never`/`always`, or `COMPOSE_BUILD=true` to change any of this.
+
+### Why recreate instead of down/up
+
+A naive "restart everything" does `docker compose down` then `up`. But `down` removes any network the project *owns* — and homelabs routinely have one stack own a shared network (`mailnet`, `proxy`, …) that other stacks join as `external`. Tear down the owner and every dependent stack fails to start with `network <x> declared as external, but could not be found` — an invisible cascade, made worse if the owner itself fails to come back. `up -d --force-recreate` recreates the containers (so they re-read secrets) while leaving networks intact, so it's safe regardless of how your stacks share networks. Use `RESTART_STRATEGY=down-up` only if you want the fuller teardown and know none of your stacks share a network.
 
 ## Why not a hardcoded list
 
@@ -76,7 +80,8 @@ Mounting at the identical host path (`/srv/stacks:/srv/stacks:ro` with `STACKS_D
 | `STACK_RETRIES` | `1` | Retries per stack on failure (not counting the first attempt). |
 | `STACK_RETRY_BACKOFF_MS` | `5000` | Sleep between retry attempts. |
 | `WAIT_BETWEEN_MS` | `3000` | Pause after the stop phase before starting. |
-| `COMPOSE_PULL` | `never` | `--pull` flag for `compose up`: `never` / `missing` / `always`. |
+| `RESTART_STRATEGY` | `recreate` | `recreate` = `up -d --force-recreate` (keeps networks; recommended). `down-up` = legacy `down` then `up` (removes project-owned networks — see [Why recreate instead of down/up](#why-recreate-instead-of-downup)). |
+| `COMPOSE_PULL` | `missing` | `--pull` flag for `compose up`: `never` / `missing` / `always`. `missing` fetches absent images without re-pulling cached ones. |
 | `COMPOSE_BUILD` | `false` | If true, allow `compose up` to auto-build. Default passes `--no-build`. |
 | `LOG_RETENTION` | `50` | How many past runs to keep on disk (older runs are pruned after each run). |
 

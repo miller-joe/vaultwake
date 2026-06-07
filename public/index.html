@@ -190,7 +190,7 @@
       $("run-id").textContent = "run " + ev.runId;
       span.className = "log-phase";
       const opts = ev.options || {};
-      span.textContent = "▶ run " + ev.runId + "  concurrency=" + opts.concurrency + " retries=" + opts.retries + " pull=" + opts.pull + " build=" + opts.build;
+      span.textContent = "▶ run " + ev.runId + "  strategy=" + opts.strategy + " concurrency=" + opts.concurrency + " retries=" + opts.retries + " pull=" + opts.pull + " build=" + opts.build;
     } else if (ev.type === "phase") {
       span.className = "log-phase";
       span.textContent = "▶ " + ev.message;
@@ -293,7 +293,7 @@
     const r = meta.result || { succeeded: [], failed: [], retried: [], skipped: 0 };
     const link = (name) => '<a href="/api/runs/' + meta.runId + '/log/' + encodeURIComponent(name) + '" target="_blank">' + name + '</a>';
     det.innerHTML =
-      '<div>options: concurrency=' + meta.options.concurrency + ' pull=' + meta.options.pull + ' build=' + meta.options.build + ' retries=' + meta.options.retries + ' timeout=' + meta.options.timeoutMs + 'ms</div>' +
+      '<div>options: strategy=' + meta.options.strategy + ' concurrency=' + meta.options.concurrency + ' pull=' + meta.options.pull + ' build=' + meta.options.build + ' retries=' + meta.options.retries + ' timeout=' + meta.options.timeoutMs + 'ms</div>' +
       '<div style="margin-top:6px">succeeded (' + r.succeeded.length + '): ' + (r.succeeded.length ? r.succeeded.map(link).join(", ") : "<span class='muted'>none</span>") + '</div>' +
       (r.retried.length ? '<div>retried (' + r.retried.length + '): ' + r.retried.map(link).join(", ") + '</div>' : '') +
       '<div>failed (' + r.failed.length + '): ' + (r.failed.length ? r.failed.map(link).join(", ") : "<span class='muted'>none</span>") + '</div>' +
