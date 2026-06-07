@@ -35,11 +35,14 @@ services:
       - "8210:3000"
     environment:
       VAULT_ADDR: http://vault:8200       # how vaultwake reaches Vault
-      STACKS_DIR: /stacks                  # where compose files live (mounted)
-      DATA_DIR: /data                      # persistent skip-list
+      # IMPORTANT: STACKS_DIR must equal the host path you mount the stacks tree
+      # at below. A different in-container path (e.g. /stacks) silently breaks
+      # stacks that use relative bind-mounts — see the note under this block.
+      STACKS_DIR: /srv/stacks              # == the host path of your stacks tree
+      DATA_DIR: /data                      # persistent skip-list + run logs
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /path/to/your/compose/stacks:/stacks:ro
+      - /srv/stacks:/srv/stacks:ro         # host path == container path (see note below)
       - /path/to/persist/vaultwake:/data
     networks:
       - vault_default                       # join Vault's docker network
@@ -50,13 +53,23 @@ networks:
 
 Then `docker compose up -d` and visit `http://<host>:8210`.
 
+### Mount the stacks tree at its host path (load-bearing)
+
+> ⚠️ **Mount your stacks directory at the *same absolute path* inside the container as it lives on the host, and point `STACKS_DIR` at that path.** This is the single most important deployment detail — get it wrong and restarts silently break.
+
+vaultwake shells out to `docker compose -f <stack>/compose.yaml down/up` against the host's Docker daemon through the mounted socket. Compose resolves **relative** bind-mounts (e.g. `./vault/config`) against the compose file's directory *as the compose CLI sees it* — i.e. the path **inside the vaultwake container** — and then hands that resolved source path to the **host** daemon.
+
+So if your stacks live at `/srv/stacks` on the host but you mount them at `/stacks`, a stack's `./vault/config` resolves to `/stacks/<name>/vault/config` and is sent to the host daemon, which has no such path. Docker silently auto-creates an *empty* directory there; the container starts with missing config (no Vault `role-id`/`secret-id`, etc.) and your app crashes — even though `up -d` reported success.
+
+Mounting at the identical host path (`/srv/stacks:/srv/stacks:ro` with `STACKS_DIR=/srv/stacks`) makes the resolved path correct on both sides. The only alternative is to use exclusively **absolute** bind-mount paths in every stack; path alignment is simpler and keeps relative paths working.
+
 ## Config
 
 | Env var | Default | What |
 | --- | --- | --- |
 | `PORT` | `3000` | Listen port inside the container |
 | `VAULT_ADDR` | `http://vault:8200` | Base URL of the Vault API |
-| `STACKS_DIR` | `/stacks` | Where to scan for `*/compose.yaml` |
+| `STACKS_DIR` | `/stacks` | Where to scan for `*/compose.yaml`. **Set this to the same absolute path you mount your stacks tree at** (see [Mount the stacks tree at its host path](#mount-the-stacks-tree-at-its-host-path-load-bearing)) — a mismatch breaks stacks that use relative bind-mounts. |
 | `DATA_DIR` | `/data` | Where the skip-list and run logs live |
 | `STACK_CONCURRENCY` | `4` | How many stacks to `down`/`up` in parallel. Set lower if dockerd is saturating. |
 | `STACK_TIMEOUT_MS` | `180000` | Per-stack subprocess timeout. SIGTERM at the limit, SIGKILL 5s later. |
